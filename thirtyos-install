@@ -1,0 +1,845 @@
+#!/bin/bash
+# ============================================================
+#  thirtyos-install — ThirtyOS Service Installer CLI
+#  Usage: thirtyos-install [command]
+# ============================================================
+
+VERSION="1.0.0"
+RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
+CYAN='\033[0;36m'; BOLD='\033[1m'; NC='\033[0m'
+
+log()  { echo -e "${GREEN}[✓]${NC} $1"; }
+info() { echo -e "${CYAN}[i]${NC} $1"; }
+warn() { echo -e "${YELLOW}[!]${NC} $1"; }
+err()  { echo -e "${RED}[✗]${NC} $1"; }
+ask()  { echo -e "${YELLOW}[?]${NC} $1"; }
+
+# ── Banner ─────────────────────────────────────────────────
+show_banner() {
+    echo -e "${CYAN}"
+    cat << 'EOF'
+  _____ _     _      _       ___  ____
+ |_   _| |__ (_)_ __| |_ _  / _ \/ ___|
+   | | | '_ \| | '__| __| || | | \___ \
+   | | | | | | | |  | |_| || |_| |___) |
+   |_| |_| |_|_|_|   \__|_| \___/|____/
+EOF
+    echo -e "${NC}  ${BOLD}thirtyos-install v${VERSION}${NC} — HG680P STB Toolkit"
+    echo ""
+}
+
+# ── Cek root ───────────────────────────────────────────────
+check_root() {
+    [[ $EUID -ne 0 ]] && { err "Butuh akses root. Jalankan: sudo thirtyos-install $1"; exit 1; }
+}
+
+# ── Help ───────────────────────────────────────────────────
+show_help() {
+    show_banner
+    echo -e "  ${BOLD}Usage:${NC} thirtyos-install <command>"
+    echo ""
+    echo -e "  ${CYAN}Commands:${NC}"
+    echo -e "    ${GREEN}setup${NC}      First-time setup wizard (hostname, timezone, user)"
+    echo -e "    ${GREEN}prepare${NC}    Install semua package (nodejs, docker, pm2, bot-wa)"
+    echo -e "    ${GREEN}optimize${NC}   Optimasi sistem (RAM, storage, scheduler)"
+    echo -e "    ${GREEN}wifi${NC}       Scan & connect WiFi (NMCLI)"
+    echo -e "    ${GREEN}bot-wa${NC}     Install / update WhatsApp bot"
+    echo -e "    ${GREEN}tunnel${NC}     Setup Cloudflare Tunnel"
+    echo -e "    ${GREEN}panel${NC}      Install web panel (CasaOS / Portainer)"
+    echo -e "    ${GREEN}media${NC}      Install Homeflix media server"
+    echo -e "    ${GREEN}retro${NC}      Install RetroArch emulator"
+    echo -e "    ${GREEN}update${NC}     Update sistem & semua service ThirtyOS"
+    echo -e "    ${GREEN}status${NC}     Lihat status semua service"
+    echo -e "    ${GREEN}uninstall${NC}  Hapus service tertentu"
+    echo -e "    ${GREEN}version${NC}    Info versi ThirtyOS"
+    echo ""
+    echo -e "  ${YELLOW}Contoh:${NC}"
+    echo -e "    thirtyos-install setup"
+    echo -e "    thirtyos-install bot-wa"
+    echo -e "    thirtyos-install status"
+    echo ""
+}
+
+# ── Command: setup ─────────────────────────────────────────
+cmd_setup() {
+    check_root "setup"
+    show_banner
+    echo -e "${BOLD}=== First-Time Setup ThirtyOS ===${NC}"
+    echo ""
+
+    # Hostname
+    ask "Masukkan hostname (default: thirtyos):"
+    read -r NEW_HOSTNAME
+    NEW_HOSTNAME="${NEW_HOSTNAME:-thirtyos}"
+    hostnamectl set-hostname "$NEW_HOSTNAME"
+    sed -i "s/127.0.1.1.*/127.0.1.1\t${NEW_HOSTNAME}/" /etc/hosts 2>/dev/null || \
+        echo "127.0.1.1 ${NEW_HOSTNAME}" >> /etc/hosts
+    log "Hostname diset ke: $NEW_HOSTNAME"
+
+    # Timezone
+    ask "Timezone (default: Asia/Jakarta):"
+    read -r TZ_INPUT
+    TZ_INPUT="${TZ_INPUT:-Asia/Jakarta}"
+    timedatectl set-timezone "$TZ_INPUT" 2>/dev/null || \
+        ln -sf "/usr/share/zoneinfo/${TZ_INPUT}" /etc/localtime
+    log "Timezone: $TZ_INPUT"
+
+    # Buat user baru
+    ask "Buat user baru? (y/N):"
+    read -r CREATE_USER
+    if [[ "$CREATE_USER" =~ ^[Yy]$ ]]; then
+        ask "Nama user:"
+        read -r NEW_USER
+        if [[ -n "$NEW_USER" ]]; then
+            useradd -m -s /bin/bash "$NEW_USER" 2>/dev/null || true
+            usermod -aG sudo,docker "$NEW_USER" 2>/dev/null || true
+            passwd "$NEW_USER"
+            log "User $NEW_USER dibuat"
+        fi
+    fi
+
+    # Static IP
+    ask "Setup static IP? (y/N):"
+    read -r STATIC_IP
+    if [[ "$STATIC_IP" =~ ^[Yy]$ ]]; then
+        IFACE=$(ip route | grep default | awk '{print $5}' | head -1)
+        ask "Interface (detected: $IFACE):"
+        read -r IFACE_INPUT
+        IFACE="${IFACE_INPUT:-$IFACE}"
+        ask "IP Address (contoh: 192.168.1.100/24):"
+        read -r IP_ADDR
+        ask "Gateway (contoh: 192.168.1.1):"
+        read -r GATEWAY
+        ask "DNS (default: 8.8.8.8):"
+        read -r DNS
+        DNS="${DNS:-8.8.8.8}"
+
+        # Tulis ke /etc/network/interfaces atau netplan tergantung distro
+        if [[ -d /etc/netplan ]]; then
+            cat > /etc/netplan/01-thirtyos-static.yaml << NETPLAN
+network:
+  version: 2
+  ethernets:
+    ${IFACE}:
+      dhcp4: no
+      addresses: [${IP_ADDR}]
+      routes:
+        - to: default
+          via: ${GATEWAY}
+      nameservers:
+        addresses: [${DNS}]
+NETPLAN
+            netplan apply 2>/dev/null || true
+        else
+            cat >> /etc/network/interfaces << NETIF
+
+auto ${IFACE}
+iface ${IFACE} inet static
+    address ${IP_ADDR}
+    gateway ${GATEWAY}
+    dns-nameservers ${DNS}
+NETIF
+        fi
+        log "Static IP dikonfigurasi"
+    fi
+
+    # ZRAM
+    info "Mengaktifkan ZRAM swap..."
+    if command -v zramswap &>/dev/null; then
+        systemctl enable --now zramswap 2>/dev/null || true
+        log "ZRAM aktif"
+    fi
+
+    echo ""
+    log "${BOLD}Setup selesai! Reboot disarankan: sudo reboot${NC}"
+}
+
+# ── Command: bot-wa ────────────────────────────────────────
+cmd_botwа() {
+    check_root "bot-wa"
+    BOT_DIR="/opt/bot-wa"
+    BOT_REPO="https://github.com/ahdikhfDev/bot-wa"
+
+    show_banner
+    echo -e "${BOLD}=== WhatsApp Bot Installer ===${NC}"
+    echo ""
+
+    # Cek apakah sudah ada
+    if [[ -d "$BOT_DIR" ]]; then
+        ask "Bot sudah terinstall. Update? (y/N):"
+        read -r DO_UPDATE
+        if [[ "$DO_UPDATE" =~ ^[Yy]$ ]]; then
+            info "Menghentikan bot..."
+            pm2 stop bot-wa 2>/dev/null || true
+            info "Update dari GitHub..."
+            cd "$BOT_DIR" && git pull
+            npm install --omit=dev
+            pm2 restart bot-wa 2>/dev/null || true
+            log "Bot berhasil diupdate!"
+        fi
+        return
+    fi
+
+    # Install baru
+    info "Mengecek Node.js..."
+    if ! command -v node &>/dev/null; then
+        info "Menginstall Node.js..."
+        curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+        apt-get install -y nodejs
+    fi
+    log "Node.js: $(node -v)"
+
+    info "Mengecek PM2..."
+    if ! command -v pm2 &>/dev/null; then
+        npm install -g pm2
+    fi
+    log "PM2: $(pm2 -v)"
+
+    info "Clone repository bot-wa..."
+    git clone --depth=1 "$BOT_REPO" "$BOT_DIR"
+    cd "$BOT_DIR"
+
+    info "Install dependencies..."
+    npm install --omit=dev
+
+    # Konfigurasi
+    if [[ -f "$BOT_DIR/.env.example" ]]; then
+        cp "$BOT_DIR/.env.example" "$BOT_DIR/.env"
+        ask "Edit konfigurasi bot sekarang? (y/N):"
+        read -r EDIT_ENV
+        [[ "$EDIT_ENV" =~ ^[Yy]$ ]] && nano "$BOT_DIR/.env"
+    fi
+
+    # Jalankan
+    ask "Jalankan bot sekarang? (Y/n):"
+    read -r RUN_NOW
+    if [[ ! "$RUN_NOW" =~ ^[Nn]$ ]]; then
+        cd "$BOT_DIR"
+
+        # Detect entry point
+        ENTRY="index.js"
+        [[ -f "src/index.js" ]] && ENTRY="src/index.js"
+        [[ -f "main.js" ]] && ENTRY="main.js"
+
+        pm2 start "$ENTRY" --name "bot-wa" \
+            --restart-delay=5000 \
+            --max-restarts=10 \
+            --log /root/.pm2/logs/bot-wa.log
+
+        pm2 save
+        pm2 startup systemd -u root --hp /root 2>/dev/null || true
+
+        echo ""
+        info "Bot berjalan. Scan QR di bawah ini:"
+        echo ""
+        sleep 2
+        pm2 logs bot-wa --lines 30 --nostream 2>/dev/null || \
+            info "Gunakan: pm2 logs bot-wa"
+    fi
+
+    echo ""
+    log "Bot WA berhasil diinstall!"
+    info "Commands:"
+    echo "  pm2 logs bot-wa      → lihat log + QR code"
+    echo "  pm2 restart bot-wa   → restart bot"
+    echo "  pm2 stop bot-wa      → stop bot"
+}
+
+# ── Command: tunnel ────────────────────────────────────────
+cmd_tunnel() {
+    check_root "tunnel"
+    show_banner
+    echo -e "${BOLD}=== Cloudflare Tunnel Setup ===${NC}"
+    echo ""
+
+    if ! command -v cloudflared &>/dev/null; then
+        info "Menginstall cloudflared..."
+        ARCH=$(dpkg --print-architecture)
+        wget -q "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-${ARCH}.deb" \
+            -O /tmp/cloudflared.deb
+        dpkg -i /tmp/cloudflared.deb
+        rm /tmp/cloudflared.deb
+        log "cloudflared terinstall"
+    else
+        log "cloudflared sudah ada: $(cloudflared --version)"
+    fi
+
+    ask "Login ke Cloudflare sekarang? (Y/n):"
+    read -r DO_LOGIN
+    if [[ ! "$DO_LOGIN" =~ ^[Nn]$ ]]; then
+        cloudflared tunnel login
+    fi
+
+    ask "Nama tunnel (contoh: thirtyos-home):"
+    read -r TUNNEL_NAME
+    TUNNEL_NAME="${TUNNEL_NAME:-thirtyos-home}"
+
+    ask "Buat tunnel baru? (Y/n):"
+    read -r CREATE_TUNNEL
+    if [[ ! "$CREATE_TUNNEL" =~ ^[Nn]$ ]]; then
+        cloudflared tunnel create "$TUNNEL_NAME"
+    fi
+
+    ask "Port lokal yang mau di-expose (contoh: 80):"
+    read -r LOCAL_PORT
+    LOCAL_PORT="${LOCAL_PORT:-80}"
+
+    ask "Subdomain kamu (contoh: home.namadomain.com):"
+    read -r SUBDOMAIN
+
+    # Buat config
+    TUNNEL_ID=$(cloudflared tunnel list | grep "$TUNNEL_NAME" | awk '{print $1}')
+    mkdir -p ~/.cloudflared
+
+    cat > ~/.cloudflared/config.yml << CF_CONFIG
+tunnel: ${TUNNEL_ID}
+credentials-file: /root/.cloudflared/${TUNNEL_ID}.json
+
+ingress:
+  - hostname: ${SUBDOMAIN}
+    service: http://localhost:${LOCAL_PORT}
+  - service: http_status:404
+CF_CONFIG
+
+    # Route DNS
+    [[ -n "$SUBDOMAIN" ]] && cloudflared tunnel route dns "$TUNNEL_NAME" "$SUBDOMAIN" 2>/dev/null || true
+
+    # Service
+    cloudflared service install 2>/dev/null || true
+    systemctl enable --now cloudflared 2>/dev/null || true
+
+    log "Tunnel aktif! Akses via: https://${SUBDOMAIN}"
+}
+
+# ── Command: panel ─────────────────────────────────────────
+cmd_panel() {
+    check_root "panel"
+    show_banner
+    echo -e "${BOLD}=== Web Panel Installer ===${NC}"
+    echo ""
+    echo -e "  ${GREEN}1)${NC} CasaOS  — Dashboard lengkap, app store"
+    echo -e "  ${GREEN}2)${NC} Portainer — Docker UI manager"
+    echo ""
+    ask "Pilih (1/2):"
+    read -r PANEL_CHOICE
+
+    case "$PANEL_CHOICE" in
+        1)
+            info "Menginstall CasaOS..."
+            if ! command -v docker &>/dev/null; then
+                warn "Docker belum ada, install dulu..."
+                curl -fsSL https://get.docker.com | sh
+            fi
+            curl -fsSL https://get.casaos.io | bash
+            log "CasaOS terinstall! Akses: http://$(hostname -I | awk '{print $1}')"
+            ;;
+        2)
+            info "Menginstall Portainer..."
+            if ! command -v docker &>/dev/null; then
+                warn "Docker belum ada, install dulu..."
+                curl -fsSL https://get.docker.com | sh
+            fi
+            docker volume create portainer_data 2>/dev/null || true
+            docker run -d \
+                --name portainer \
+                --restart=always \
+                -p 9000:9000 \
+                -v /var/run/docker.sock:/var/run/docker.sock \
+                -v portainer_data:/data \
+                portainer/portainer-ce:latest
+            log "Portainer terinstall! Akses: http://$(hostname -I | awk '{print $1}'):9000"
+            ;;
+        *)
+            err "Pilihan tidak valid"
+            ;;
+    esac
+}
+
+# ── Command: media ─────────────────────────────────────────
+cmd_media() {
+    check_root "media"
+    show_banner
+    echo -e "${BOLD}=== Homeflix Installer ===${NC}"
+    echo ""
+
+    if ! command -v docker &>/dev/null; then
+        warn "Docker belum ada, install dulu..."
+        curl -fsSL https://get.docker.com | sh
+        systemctl enable --now docker
+    fi
+
+    ask "Path folder media kamu (default: /opt/media):"
+    read -r MEDIA_PATH
+    MEDIA_PATH="${MEDIA_PATH:-/opt/media}"
+    mkdir -p "$MEDIA_PATH"
+
+    info "Menjalankan Homeflix via Docker..."
+    docker run -d \
+        --name homeflix \
+        --restart=always \
+        -p 4000:4000 \
+        -v "${MEDIA_PATH}:/movies" \
+        xebadir/homeflix:latest 2>/dev/null || \
+    docker start homeflix 2>/dev/null || \
+    warn "Cek image Homeflix terbaru di Docker Hub"
+
+    log "Homeflix berjalan! Akses: http://$(hostname -I | awk '{print $1}'):4000"
+}
+
+# ── Command: retro ─────────────────────────────────────────
+cmd_retro() {
+    check_root "retro"
+    show_banner
+    echo -e "${BOLD}=== RetroArch Installer ===${NC}"
+    echo ""
+
+    info "Menginstall RetroArch..."
+    apt-get update -qq
+    apt-get install -y retroarch 2>/dev/null || {
+        # PPA fallback
+        add-apt-repository ppa:libretro/stable -y 2>/dev/null || true
+        apt-get update -qq
+        apt-get install -y retroarch
+    }
+
+    info "Menginstall core emulator populer..."
+    apt-get install -y \
+        libretro-snes9x \
+        libretro-mgba \
+        libretro-nestopia \
+        libretro-mupen64plus 2>/dev/null || \
+    warn "Beberapa core mungkin tidak tersedia, download manual via RetroArch"
+
+    log "RetroArch terinstall!"
+    info "Jalankan: retroarch"
+    info "Atau tambah ke PM2: pm2 start retroarch --name retro"
+}
+
+# ── Command: update ────────────────────────────────────────
+cmd_update() {
+    check_root "update"
+    show_banner
+    echo -e "${BOLD}=== Update ThirtyOS ===${NC}"
+    echo ""
+
+    info "Update sistem..."
+    apt-get update -qq && apt-get upgrade -y
+    log "Sistem terupdate"
+
+    info "Update npm global packages..."
+    npm update -g 2>/dev/null || true
+    log "NPM packages terupdate"
+
+    info "Update bot-wa..."
+    if [[ -d /opt/bot-wa ]]; then
+        pm2 stop bot-wa 2>/dev/null || true
+        cd /opt/bot-wa && git pull && npm install --omit=dev
+        pm2 restart bot-wa 2>/dev/null || true
+        log "bot-wa terupdate"
+    else
+        warn "bot-wa belum diinstall, skip"
+    fi
+
+    info "Update thirtyos-install..."
+    # Cek update dari GitHub (opsional, uncomment kalau ada repo)
+    # curl -fsSL https://raw.githubusercontent.com/ahdikhfDev/thirtyos/main/thirtyos-install \
+    #     -o /usr/local/bin/thirtyos-install && chmod +x /usr/local/bin/thirtyos-install
+
+    log "Update selesai!"
+}
+
+# ── Command: status ────────────────────────────────────────
+cmd_status() {
+    show_banner
+    echo -e "${BOLD}=== Status ThirtyOS ===${NC}"
+    echo ""
+
+    # Info sistem
+    echo -e "${CYAN}── Sistem ────────────────────────────${NC}"
+    echo -e "  Hostname  : $(hostname)"
+    echo -e "  IP        : $(hostname -I | tr ' ' '\n' | grep -v '^$' | head -3 | tr '\n' ' ')"
+    echo -e "  Uptime    : $(uptime -p)"
+    echo -e "  RAM       : $(free -m | awk '/Mem/{printf "%dMB used / %dMB total", $3, $2}')"
+    echo -e "  ZRAM      : $(zramctl 2>/dev/null | grep -v NAME | awk '{print $5}' | head -1 || echo 'N/A')"
+    DISK=$(df -h / | awk 'NR==2{printf "%s used / %s total", $3, $2}')
+    echo -e "  Disk      : $DISK"
+    echo ""
+
+    # PM2 services
+    echo -e "${CYAN}── PM2 Services ──────────────────────${NC}"
+    if command -v pm2 &>/dev/null; then
+        pm2 list 2>/dev/null || echo "  Tidak ada service PM2"
+    else
+        echo "  PM2 belum diinstall"
+    fi
+    echo ""
+
+    # Docker containers
+    echo -e "${CYAN}── Docker Containers ─────────────────${NC}"
+    if command -v docker &>/dev/null; then
+        docker ps --format "  {{.Names}}\t{{.Status}}\t{{.Ports}}" 2>/dev/null || \
+            echo "  Docker tidak berjalan"
+    else
+        echo "  Docker belum diinstall"
+    fi
+    echo ""
+
+    # Services
+    echo -e "${CYAN}── System Services ───────────────────${NC}"
+    for svc in cloudflared docker zramswap ssh; do
+        STATUS=$(systemctl is-active "$svc" 2>/dev/null || echo "not-found")
+        if [[ "$STATUS" == "active" ]]; then
+            echo -e "  ${GREEN}●${NC} $svc"
+        else
+            echo -e "  ${RED}○${NC} $svc ($STATUS)"
+        fi
+    done
+    echo ""
+
+    # ThirtyOS version
+    if [[ -f /etc/thirtyos-release ]]; then
+        source /etc/thirtyos-release
+        echo -e "${CYAN}── ThirtyOS ───────────────────────────${NC}"
+        echo -e "  Version   : $THIRTYOS_VERSION ($THIRTYOS_CODENAME)"
+        echo -e "  Build     : $THIRTYOS_BUILD_DATE"
+        echo ""
+    fi
+}
+
+# ── Command: uninstall ─────────────────────────────────────
+cmd_uninstall() {
+    check_root "uninstall"
+    show_banner
+    echo -e "${BOLD}=== Uninstall Service ===${NC}"
+    echo ""
+    echo -e "  ${GREEN}1)${NC} bot-wa"
+    echo -e "  ${GREEN}2)${NC} cloudflared"
+    echo -e "  ${GREEN}3)${NC} CasaOS"
+    echo -e "  ${GREEN}4)${NC} Portainer"
+    echo -e "  ${GREEN}5)${NC} Homeflix"
+    echo ""
+    ask "Pilih service yang mau dihapus (1-5):"
+    read -r CHOICE
+
+    case "$CHOICE" in
+        1)
+            pm2 stop bot-wa 2>/dev/null; pm2 delete bot-wa 2>/dev/null || true
+            rm -rf /opt/bot-wa
+            log "bot-wa dihapus"
+            ;;
+        2)
+            systemctl stop cloudflared 2>/dev/null || true
+            cloudflared service uninstall 2>/dev/null || true
+            apt-get remove -y cloudflared 2>/dev/null || true
+            log "cloudflared dihapus"
+            ;;
+        3)
+            warn "Uninstall CasaOS..."
+            curl -fsSL https://get.casaos.io/uninstall | bash 2>/dev/null || true
+            log "CasaOS dihapus"
+            ;;
+        4)
+            docker stop portainer 2>/dev/null; docker rm portainer 2>/dev/null || true
+            docker volume rm portainer_data 2>/dev/null || true
+            log "Portainer dihapus"
+            ;;
+        5)
+            docker stop homeflix 2>/dev/null; docker rm homeflix 2>/dev/null || true
+            log "Homeflix dihapus"
+            ;;
+        *)
+            err "Pilihan tidak valid"
+            ;;
+    esac
+}
+
+# ── Command: version ───────────────────────────────────────
+cmd_version() {
+    show_banner
+    if [[ -f /etc/thirtyos-release ]]; then
+        source /etc/thirtyos-release
+        echo -e "  ${BOLD}ThirtyOS${NC} v${THIRTYOS_VERSION} \"${THIRTYOS_CODENAME}\""
+        echo -e "  Build    : ${THIRTYOS_BUILD_DATE}"
+        echo -e "  Board    : ${THIRTYOS_BOARD}"
+        echo -e "  Base     : ${THIRTYOS_BASE}"
+    else
+        echo -e "  thirtyos-install v${VERSION}"
+    fi
+    echo ""
+}
+
+# ── Command: prepare ─────────────────────────────────────
+cmd_prepare() {
+    check_root "prepare"
+    show_banner
+    echo -e "${BOLD}=== First-Boot Preparation ===${NC}"
+    echo ""
+
+    info "Update package list..."
+    apt-get update -qq || true
+
+    info "Install Node.js & npm..."
+    if ! command -v node &>/dev/null; then
+        curl -fsSL https://deb.nodesource.com/setup_20.x | bash - 2>/dev/null || true
+        apt-get install -y nodejs 2>/dev/null || true
+    fi
+    if command -v node &>/dev/null; then
+        log "Node.js: $(node -v)"
+        info "Install PM2..."
+        npm install -g pm2 2>/dev/null || true
+    fi
+
+    info "Install Docker..."
+    if ! command -v docker &>/dev/null; then
+        curl -fsSL https://get.docker.com | sh 2>/dev/null || true
+        systemctl enable --now docker 2>/dev/null || true
+    fi
+    if command -v docker &>/dev/null; then
+        log "Docker: $(docker --version)"
+    fi
+
+    info "Install system packages..."
+    apt-get install -y --no-install-recommends \
+        nano htop \
+        zram-tools \
+        unzip zip \
+        net-tools \
+        jq 2>/dev/null || true
+
+    info "Setup ZRAM..."
+    systemctl enable --now zramswap 2>/dev/null || true
+
+    info "Clone bot-wa..."
+    if [[ ! -d /opt/bot-wa ]]; then
+        git clone --depth=1 https://github.com/ahdikhfDev/bot-wa /opt/bot-wa 2>/dev/null || true
+    fi
+    if [[ -d /opt/bot-wa ]]; then
+        cd /opt/bot-wa && npm install --omit=dev 2>/dev/null || true
+    fi
+
+    # Setup log rotation
+    cat > /etc/logrotate.d/thirtyos << 'LOGROTATE'
+/root/.pm2/logs/*.log {
+    daily
+    rotate 3
+    compress
+    missingok
+    notifempty
+    copytruncate
+}
+LOGROTATE
+
+    # PM2 startup
+    pm2 startup systemd -u root --hp /root 2>/dev/null || true
+
+    # Cleanup
+    apt-get clean 2>/dev/null || true
+    apt-get autoremove -y 2>/dev/null || true
+
+    echo ""
+    log "${BOLD}Selesai! Semua package sudah terinstall.${NC}"
+}
+
+# ── Command: wifi ──────────────────────────────────────────
+cmd_wifi() {
+    check_root "wifi"
+    show_banner
+    echo -e "${BOLD}=== WiFi Manager ===${NC}"
+    echo ""
+
+    # Cek NetworkManager
+    if command -v nmcli &>/dev/null; then
+        WIFI_IFACE=$(nmcli device status 2>/dev/null | grep wifi | awk '{print $1}' | head -1)
+        if [[ -z "$WIFI_IFACE" ]]; then
+            err "Tidak ada adapter WiFi terdeteksi"
+        fi
+        log "Adapter WiFi: $WIFI_IFACE"
+
+        echo ""
+        ask "Pilih aksi (1: scan & connect, 2: disconnect, 3: status):"
+        read -r WIFI_ACTION
+
+        case "$WIFI_ACTION" in
+            1)
+                info "Scanning jaringan..."
+                nmcli device wifi list "$WIFI_IFACE" 2>/dev/null || nmcli device wifi list
+                echo ""
+                ask "Nama SSID:"
+                read -r SSID
+                ask "Password (kosongin kalo open):"
+                read -rs PASSWORD
+                echo ""
+                if [[ -z "$PASSWORD" ]]; then
+                    nmcli device wifi connect "$SSID" iface "$WIFI_IFACE"
+                else
+                    nmcli device wifi connect "$SSID" password "$PASSWORD" iface "$WIFI_IFACE"
+                fi
+                if [[ $? -eq 0 ]]; then
+                    log "Terhubung ke $SSID"
+                    info "IP: $(nmcli -t -f IP4.ADDRESS dev show "$WIFI_IFACE" 2>/dev/null | head -1)"
+                else
+                    err "Gagal connect ke $SSID"
+                fi
+                ;;
+            2)
+                ask "Nama SSID yang mau di-disconnect:"
+                read -r SSID
+                nmcli connection down id "$SSID" 2>/dev/null || \
+                    nmcli device disconnect "$WIFI_IFACE"
+                log "Disconnected"
+                ;;
+            3)
+                nmcli device status
+                echo ""
+                nmcli connection show --active
+                ;;
+        esac
+
+    elif command -v iwctl &>/dev/null; then
+        iwctl
+    elif command -v wpa_cli &>/dev/null; then
+        warn "NetworkManager tidak terinstall, pakai wpa_supplicant manual"
+        info "Lihat jaringan: sudo iw dev wlan0 scan | grep SSID"
+        ask "SSID:"
+        read -r SSID
+        ask "Password:"
+        read -rs PASSWORD
+        echo ""
+        wpa_passphrase "$SSID" "$PASSWORD" >> /etc/wpa_supplicant/wpa_supplicant.conf
+        wpa_supplicant -B -i wlan0 -c /etc/wpa_supplicant/wpa_supplicant.conf
+        dhclient wlan0
+        log "Terhubung ke $SSID"
+    else
+        err "Tidak ada WiFi manager (nmcli/iwctl/wpa_supplicant). Install: apt install network-manager"
+    fi
+}
+
+# ── Command: optimize ──────────────────────────────────────
+cmd_optimize() {
+    check_root "optimize"
+    show_banner
+    echo -e "${BOLD}=== ThirtyOS Optimizer ===${NC}"
+    echo ""
+
+    echo -e "  ${GREEN}1)${NC} Optimasi semua (recommended)"
+    echo -e "  ${GREEN}2)${NC} Custom — pilih manual"
+    echo ""
+    ask "Pilih (1/2):"
+    read -r OPT_CHOICE
+
+    do_optimize_all() {
+        echo ""
+
+        info "1/7 — Matikan journal persistent (log di RAM)..."
+        journalctl --vacuum-size=10M 2>/dev/null || true
+        cat > /etc/systemd/journald.conf << 'JOURNAL'
+[Journal]
+Storage=volatile
+RuntimeMaxUse=50M
+ForwardToSyslog=no
+JOURNAL
+        systemctl restart systemd-journald 2>/dev/null || true
+        log "Journal pindah ke RAM (50MB max)"
+
+        info "2/7 — Turunin swappiness..."
+        echo "vm.swappiness=10" > /etc/sysctl.d/90-swappiness.conf
+        sysctl -w vm.swappiness=10 2>/dev/null || true
+        log "Swappiness: 10"
+
+        info "3/7 — IO Scheduler buat SSD..."
+        for disk in /sys/block/sd* /sys/block/nvme*; do
+            [[ -f "$disk/queue/scheduler" ]] && \
+                echo "none" > "$disk/queue/scheduler" 2>/dev/null || true
+        done
+        cat > /etc/udev/rules.d/60-iosched.rules << 'UDEV'
+ACTION=="add|change", KERNEL=="sd*", ATTR{queue/scheduler}="none"
+ACTION=="add|change", KERNEL=="nvme*", ATTR{queue/scheduler}="none"
+UDEV
+        log "IO Scheduler: none (NVMe) / none (SSD)"
+
+        info "4/7 — CPU governor: schedutil..."
+        for cpu in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do
+            echo "schedutil" > "$cpu" 2>/dev/null || true
+        done
+        cat > /etc/udev/rules.d/60-cpugovernor.rules << 'CPUFREQ'
+ACTION=="add", SUBSYSTEM=="cpu", RUN+="/bin/sh -c 'echo schedutil > /sys/devices/system/cpu/cpu%n/cpufreq/scaling_governor'"
+CPUFREQ
+        log "CPU Governor: schedutil"
+
+        info "5/7 — Disable NetworkManager (kalo pake static IP)..."
+        if systemctl is-active NetworkManager &>/dev/null; then
+            warn "NetworkManager aktif. Matikan? (y/N):"
+            read -r NM_DISABLE
+            if [[ "$NM_DISABLE" =~ ^[Yy]$ ]]; then
+                systemctl disable --now NetworkManager 2>/dev/null || true
+                log "NetworkManager dimatikan"
+            fi
+        else
+            log "NetworkManager sudah nonaktif"
+        fi
+
+        info "6/7 — Bersihin cache & package ga kepake..."
+        apt-get clean 2>/dev/null || true
+        apt-get autoremove --purge -y 2>/dev/null || true
+        rm -rf /var/lib/apt/lists/* 2>/dev/null || true
+        rm -rf /tmp/* 2>/dev/null || true
+        log "Cache & orphans dibersihkan"
+
+        info "7/7 — Disable service ga penting..."
+        for svc in cups-browsed cups bluetooth avahi-daemon ModemManager \
+                   apt-daily apt-daily-upgrade whoopsie pppd-dns \
+                   speech-dispatcher; do
+            systemctl disable $svc 2>/dev/null || true
+            systemctl mask $svc 2>/dev/null || true
+        done
+        log "Service ga penting di-mask"
+
+        echo ""
+        log "${BOLD}Optimasi selesai! RAM & storage lebih efisien.${NC}"
+        info "Reboot disarankan: sudo reboot"
+    }
+
+    case "$OPT_CHOICE" in
+        1|"") do_optimize_all ;;
+        2)
+            echo ""
+            for opt in \
+                "journal persistent -> RAM" \
+                "swappiness 10" \
+                "IO scheduler none" \
+                "CPU governor schedutil" \
+                "Matikan NetworkManager" \
+                "Bersihin cache" \
+                "Disable service ga penting"; do
+                ask "Jalankan: $opt? (y/N):"
+                read -r ANSWER
+                [[ "$ANSWER" =~ ^[Yy]$ ]] && do_optimize_all
+            done
+            ;;
+        *) err "Pilihan tidak valid" ;;
+    esac
+}
+
+# ── Main ───────────────────────────────────────────────────
+case "${1:-help}" in
+    setup)     cmd_setup ;;
+    bot-wa)    cmd_botwа ;;
+    tunnel)    cmd_tunnel ;;
+    panel)     cmd_panel ;;
+    media)     cmd_media ;;
+    retro)     cmd_retro ;;
+    wifi)      cmd_wifi ;;
+    optimize)  cmd_optimize ;;
+    prepare)   cmd_prepare ;;
+    update)    cmd_update ;;
+    status)    cmd_status ;;
+    uninstall) cmd_uninstall ;;
+    version)   cmd_version ;;
+    help|--help|-h) show_help ;;
+    *)
+        err "Command tidak dikenal: $1"
+        echo ""
+        show_help
+        exit 1
+        ;;
+esac
