@@ -42,6 +42,7 @@ show_help() {
     echo -e "    ${GREEN}setup${NC}      First-time setup wizard (hostname, timezone, user)"
     echo -e "    ${GREEN}prepare${NC}    Install semua package (nodejs, docker, pm2, bot-wa)"
     echo -e "    ${GREEN}optimize${NC}   Optimasi sistem (RAM, storage, scheduler)"
+    echo -e "    ${GREEN}ai${NC}         Install AI stack (9Router + OpenCode) \$0/bulan"
     echo -e "    ${GREEN}wifi${NC}       Scan & connect WiFi (NMCLI)"
     echo -e "    ${GREEN}bot-wa${NC}     Install / update WhatsApp bot"
     echo -e "    ${GREEN}tunnel${NC}     Setup Cloudflare Tunnel"
@@ -55,8 +56,14 @@ show_help() {
     echo ""
     echo -e "  ${YELLOW}Contoh:${NC}"
     echo -e "    thirtyos-install setup"
-    echo -e "    thirtyos-install bot-wa"
+    echo -e "    thirtyos-install ai setup"
     echo -e "    thirtyos-install status"
+    echo ""
+    echo -e "  ${YELLOW}AI Stack (\$0/month):${NC}"
+    echo -e "    thirtyos-install ai setup    Install 9Router + OpenCode + PM2"
+    echo -e "    thirtyos-install ai status   Lihat status AI services"
+    echo -e "    thirtyos-install ai tunnel   Expose AI dashboard via Cloudflare"
+    echo -e "    Laptop: ssh -L 20128:localhost:20128 thirty@<ip-stb>"
     echo ""
 }
 
@@ -792,7 +799,8 @@ CPUFREQ
                 log "NetworkManager dimatikan"
             fi
         else
-        log "NetworkManager sudah nonaktif"
+            log "NetworkManager sudah nonaktif"
+        fi
 
         info "7/8 — Bersihin cache & package ga kepake..."
         apt-get clean 2>/dev/null || true
@@ -836,9 +844,321 @@ CPUFREQ
     esac
 }
 
+# ── Command: ai ────────────────────────────────────────────
+cmd_ai() {
+    case "${2:-help}" in
+        setup|install)
+            cmd_ai_setup
+            ;;
+        status)
+            cmd_ai_status
+            ;;
+        update)
+            cmd_ai_update
+            ;;
+        tunnel)
+            cmd_ai_tunnel
+            ;;
+        help|--help|-h|*)
+            show_ai_help
+            ;;
+    esac
+}
+
+show_ai_help() {
+    check_root "ai"
+    show_banner
+    echo -e "  ${BOLD}Usage:${NC} thirtyos-install ai <subcommand>"
+    echo ""
+    echo -e "  ${CYAN}Subcommands:${NC}"
+    echo -e "    ${GREEN}setup${NC}     Install & configure 9Router + OpenCode"
+    echo -e "    ${GREEN}status${NC}    Show AI services status"
+    echo -e "    ${GREEN}update${NC}    Update 9Router + OpenCode"
+    echo -e "    ${GREEN}tunnel${NC}    Expose OpenCode via Cloudflare Tunnel"
+    echo ""
+    echo -e "  ${YELLOW}Arsitektur:${NC}"
+    echo -e "    OpenCode (STB) → 9Router (localhost:20128) → Free AI Providers"
+    echo -e "    Akses dari laptop/HP via SSH tunnel atau Cloudflare"
+    echo ""
+}
+
+cmd_ai_setup() {
+    check_root "ai"
+    show_banner
+    echo -e "${BOLD}=== AI Service Setup ===${NC}"
+    echo ""
+
+    # ── Cek Node.js ──
+    info "Mengecek Node.js..."
+    if ! command -v node &>/dev/null; then
+        warn "Node.js belum ada, install dulu..."
+        curl -fsSL https://deb.nodesource.com/setup_20.x | bash - 2>/dev/null || true
+        apt-get install -y nodejs 2>/dev/null || true
+    fi
+    log "Node.js: $(node --version 2>/dev/null || echo 'N/A')"
+
+    # ── Install 9Router ──
+    info "Install 9Router..."
+    if command -v 9router &>/dev/null; then
+        warn "9Router sudah terinstall: $(9router --version 2>/dev/null || echo 'latest')"
+        ask "Update 9Router? (Y/n):"
+        read -r UPDATE_9R
+        if [[ ! "$UPDATE_9R" =~ ^[Nn]$ ]]; then
+            npm update -g 9router 2>/dev/null || true
+            log "9Router diupdate"
+        fi
+    else
+        npm install -g 9router 2>&1 || err "Gagal install 9Router"
+        log "9Router terinstall"
+    fi
+
+    # ── Install OpenCode ──
+    info "Install OpenCode..."
+    if command -v opencode &>/dev/null; then
+        warn "OpenCode sudah terinstall: $(opencode --version 2>/dev/null || echo 'latest')"
+        ask "Update OpenCode? (Y/n):"
+        read -r UPDATE_OC
+        if [[ ! "$UPDATE_OC" =~ ^[Nn]$ ]]; then
+            curl -fsSL https://opencode.ai/install | bash 2>/dev/null || true
+            log "OpenCode diupdate"
+        fi
+    else
+        curl -fsSL https://opencode.ai/install | bash 2>/dev/null || err "Gagal install OpenCode"
+        log "OpenCode terinstall"
+    fi
+
+    # ── Config 9Router ──
+    info "Konfigurasi 9Router..."
+    mkdir -p /root/.9router
+    cat > /root/.9router/config.json << 'CFG'
+{
+  "port": 20128,
+  "dashboard": true,
+  "fallback": {
+    "enabled": true,
+    "tiers": ["free", "cheap"],
+    "strategy": "auto"
+  },
+  "providers": {
+    "kiro": { "enabled": true, "tier": "free" },
+    "opencode-free": { "enabled": true, "tier": "free" },
+    "iflow": { "enabled": true, "tier": "free" },
+    "qwen": { "enabled": true, "tier": "free" }
+  },
+  "rtk": {
+    "enabled": true,
+    "mode": "lossless",
+    "target": "tool_result"
+  }
+}
+CFG
+    log "9Router dikonfigurasi dengan free providers"
+
+    # ── Buat systemd service untuk 9Router ──
+    cat > /etc/systemd/system/9router.service << 'SVC9R'
+[Unit]
+Description=9Router AI Gateway
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/9router
+Restart=always
+RestartSec=5
+User=root
+Environment=NODE_ENV=production
+
+[Install]
+WantedBy=multi-user.target
+SVC9R
+    systemctl daemon-reload 2>/dev/null || true
+    systemctl enable --now 9router 2>/dev/null || true
+    log "9Router service aktif"
+
+    # ── Tunggu 9Router jalan ──
+    info "Tunggu 9Router siap..."
+    sleep 3
+
+    # ── Cek 9Router ──
+    if curl -s http://localhost:20128/health >/dev/null 2>&1; then
+        log "9Router berjalan di localhost:20128"
+    else
+        warn "9Router mungkin belum siap, cek: systemctl status 9router"
+    fi
+
+    # ── Config OpenCode ──
+    info "Konfigurasi OpenCode..."
+    OPENCODE_CONFIG_DIR=""
+    if [[ -n "$SUDO_USER" ]]; then
+        OC_USER_HOME=$(eval echo ~$SUDO_USER)
+        OPENCODE_CONFIG_DIR="$OC_USER_HOME/.config/opencode"
+    else
+        OPENCODE_CONFIG_DIR="$HOME/.config/opencode"
+    fi
+    mkdir -p "$OPENCODE_CONFIG_DIR"
+
+    # Cek apakah ada opencode.json
+    OC_CONFIG="$OPENCODE_CONFIG_DIR/config.json"
+    cat > "$OC_CONFIG" << 'OCCFG'
+{
+  "model": {
+    "provider": "opencode",
+    "model": "opencode-free"
+  },
+  "api": {
+    "baseUrl": "http://localhost:20128/v1",
+    "model": "gpt-4o-mini"
+  },
+  "mode": "headless",
+  "telemetry": false,
+  "autoUpdate": true
+}
+OCCFG
+    chown -R $(stat -c '%u:%g' "$OPENCODE_CONFIG_DIR/.." 2>/dev/null || true) "$OPENCODE_CONFIG_DIR" 2>/dev/null || true
+    log "OpenCode dikonfigurasi (endpoint: localhost:20128/v1)"
+
+    # ── Info dashboard ──
+    echo ""
+    log "${BOLD}AI Services siap!${NC}"
+    echo -e "  9Router Dashboard : ${CYAN}http://localhost:20128/dashboard${NC}"
+    echo -e "  OpenCode CLI      : ${CYAN}opencode${NC}"
+    echo ""
+    echo -e "  ${YELLOW}Akses dari laptop:${NC}"
+    echo -e "  ssh -L 20128:localhost:20128 thirty@<ip-stb>"
+    echo -e "  Buka http://localhost:20128/dashboard di browser laptop"
+    echo ""
+    echo -e "  ${YELLOW}Pertama kali pake OpenCode:${NC}"
+    echo -e "  opencode"
+    echo ""
+}
+
+cmd_ai_status() {
+    check_root "ai"
+    echo ""
+    echo -e "${CYAN}── 9Router ────────────────────────────${NC}"
+    if command -v 9router &>/dev/null; then
+        echo -e "  Installed : $(9router --version 2>/dev/null || echo 'yes')"
+        systemctl is-active 9router &>/dev/null && \
+            echo -e "  Status    : ${GREEN}● running${NC}" || \
+            echo -e "  Status    : ${RED}○ stopped${NC}"
+        echo -e "  Endpoint  : http://localhost:20128/v1"
+        echo -e "  Dashboard : http://localhost:20128/dashboard"
+    else
+        echo -e "  ${RED}Not installed${NC}"
+    fi
+    echo ""
+    echo -e "${CYAN}── OpenCode ───────────────────────────${NC}"
+    if command -v opencode &>/dev/null; then
+        echo -e "  Installed : $(opencode --version 2>/dev/null || echo 'yes')"
+        OC_PID=$(pgrep -f "opencode" 2>/dev/null | head -1)
+        if [[ -n "$OC_PID" ]]; then
+            echo -e "  Status    : ${GREEN}● running (PID $OC_PID)${NC}"
+        else
+            echo -e "  Status    : ${YELLOW}○ idle (run 'opencode' to start)${NC}"
+        fi
+    else
+        echo -e "  ${RED}Not installed${NC}"
+    fi
+    echo ""
+    echo -e "${CYAN}── PM2 Services ──────────────────────${NC}"
+    if command -v pm2 &>/dev/null; then
+        pm2 list 2>/dev/null | grep -E '9router|opencode' || \
+            echo "  Tidak ada service AI di PM2"
+    fi
+    echo ""
+}
+
+cmd_ai_update() {
+    check_root "ai"
+    show_banner
+    echo -e "${BOLD}=== AI Service Update ===${NC}"
+    echo ""
+
+    info "Update 9Router..."
+    npm update -g 9router 2>/dev/null || true
+    systemctl restart 9router 2>/dev/null || true
+    log "9Router diupdate"
+
+    info "Update OpenCode..."
+    curl -fsSL https://opencode.ai/install | bash 2>/dev/null || true
+    log "OpenCode diupdate"
+
+    log "${BOLD}AI services update selesai!${NC}"
+}
+
+cmd_ai_tunnel() {
+    check_root "ai"
+    show_banner
+    echo -e "${BOLD}=== Expose AI via Cloudflare Tunnel ===${NC}"
+    echo ""
+
+    if ! command -v cloudflared &>/dev/null; then
+        info "Menginstall cloudflared..."
+        ARCH=$(dpkg --print-architecture)
+        wget -q "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-${ARCH}.deb" \
+            -O /tmp/cloudflared.deb 2>/dev/null || true
+        dpkg -i /tmp/cloudflared.deb 2>/dev/null || true
+        rm /tmp/cloudflared.deb 2>/dev/null || true
+    fi
+
+    echo -e "  Buat tunnel untuk akses AI dashboard & API dari luar."
+    echo -e "  Port yang di-expose:"
+    echo -e "    ${GREEN}20128${NC} — 9Router Dashboard + API"
+    echo ""
+    ask "Domain/subdomain (contoh: ai.namadomain.com):"
+    read -r AI_DOMAIN
+
+    ask "Login Cloudflare dulu? (Y/n):"
+    read -r CF_LOGIN
+    if [[ ! "$CF_LOGIN" =~ ^[Nn]$ ]]; then
+        cloudflared tunnel login
+    fi
+
+    TUNNEL_NAME="thirtyos-ai"
+    cloudflared tunnel create "$TUNNEL_NAME" 2>/dev/null || true
+    TUNNEL_ID=$(cloudflared tunnel list 2>/dev/null | grep "$TUNNEL_NAME" | awk '{print $1}' | head -1)
+
+    mkdir -p ~/.cloudflared
+    cat > ~/.cloudflared/config-ai.yml << CFG
+tunnel: ${TUNNEL_ID}
+credentials-file: /root/.cloudflared/${TUNNEL_ID}.json
+
+ingress:
+  - hostname: ${AI_DOMAIN}
+    service: http://localhost:20128
+  - service: http_status:404
+CFG
+
+    [[ -n "$AI_DOMAIN" ]] && cloudflared tunnel route dns "$TUNNEL_NAME" "$AI_DOMAIN" 2>/dev/null || true
+
+    # Jalankan sebagai service terpisah
+    cat > /etc/systemd/system/cloudflared-ai.service << SVC
+[Unit]
+Description=Cloudflare Tunnel - AI
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/cloudflared tunnel --config /root/.cloudflared/config-ai.yml run
+Restart=always
+RestartSec=5
+User=root
+
+[Install]
+WantedBy=multi-user.target
+SVC
+    systemctl daemon-reload 2>/dev/null || true
+    systemctl enable --now cloudflared-ai 2>/dev/null || true
+
+    log "AI Tunnel aktif! Akses: https://${AI_DOMAIN}"
+    info "Dashboard : https://${AI_DOMAIN}/dashboard"
+    info "API       : https://${AI_DOMAIN}/v1"
+}
+
 # ── Main ───────────────────────────────────────────────────
 case "${1:-help}" in
     setup)     cmd_setup ;;
+    ai)        cmd_ai "$@" ;;
     bot-wa)    cmd_botwа ;;
     tunnel)    cmd_tunnel ;;
     panel)     cmd_panel ;;
