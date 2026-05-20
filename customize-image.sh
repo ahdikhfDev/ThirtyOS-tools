@@ -178,14 +178,20 @@ echo "--- Custom MOTD ---"
 rm -f /etc/update-motd.d/*
 cat > /etc/update-motd.d/00-thirtyos << 'MOTD'
 #!/bin/bash
-PURPLE='\033[0;35m'; YELLOW='\033[1;33m'; GREEN='\033[0;32m'; NC='\033[0m'
-echo -e "${PURPLE}"
-echo "  __  __    _      __           ____  _____"
-echo "  / /_/ /_  (_)____/ /_ __  __  / __ \\/ ___/"
-echo " / __/ __ \\/ / ___/ __// / / / / / / /\\__ \\"
-echo "/ /_/ / / / / /  / /_ / /_/ / / /_/ /___/ /"
-echo "\\__/_/ /_/_/_/   \\__/ \\__, /  \\____//____/"
-echo "                     /____/"
+CYAN='\033[0;36m'
+YELLOW='\033[1;33m'
+GREEN='\033[0;32m'
+NC='\033[0m'
+
+echo -e "${CYAN}"
+cat << 'ASCII'
+   __  __    _      __           ____  _____
+  / /_/ /_  (_)____/ /_ __  __  / __ \/ ___/
+ / __/ __ \/ / ___/ __// / / / / / / /\__ \ 
+/ /_/ / / / / /  / /_ / /_/ / / /_/ /___/ / 
+\__/_/ /_/_/_/   \__/ \__, /  \____//____/  
+                     /____/                 
+ASCII
 echo -e "${NC}"
 echo -e "${YELLOW}  ThirtyOS v1.0 — Custom Armbian for HG680P${NC}"
 echo -e "${GREEN}  by Thirty | github.com/ahdikhfDev${NC}"
