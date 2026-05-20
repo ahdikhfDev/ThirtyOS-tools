@@ -110,15 +110,23 @@ log "Image ter-mount di $MOUNT_DIR"
 
 trap cleanup_mount EXIT
 
-# ── Copy thirtyos-install ke image ────────────────────────
-info "Menyalin thirtyos-install CLI..."
-SCRIPT_DIR="$(dirname "$(realpath "$0")")"
-if [[ -f "$SCRIPT_DIR/thirtyos-install" ]]; then
-    cp "$SCRIPT_DIR/thirtyos-install" "$MOUNT_DIR/usr/local/bin/thirtyos-install"
+# ── Download thirtyos-install dari GitHub ─────────────────
+info "Download thirtyos-install dari GitHub..."
+THIRTYOS_INSTALL_URL="https://raw.githubusercontent.com/ahdikhfDev/ThirtyOS-tools/main/thirtyos-install"
+if curl -fsSL "$THIRTYOS_INSTALL_URL" -o "$MOUNT_DIR/usr/local/bin/thirtyos-install" 2>/dev/null; then
     chmod +x "$MOUNT_DIR/usr/local/bin/thirtyos-install"
-    log "thirtyos-install tersalin"
+    log "thirtyos-install terdownload dari GitHub"
 else
-    warn "thirtyos-install tidak ditemukan di direktori yang sama, skip."
+    # Fallback ke local
+    warn "Download gagal, coba dari lokal..."
+    SCRIPT_DIR="$(dirname "$(realpath "$0")")"
+    if [[ -f "$SCRIPT_DIR/thirtyos-install" ]]; then
+        cp "$SCRIPT_DIR/thirtyos-install" "$MOUNT_DIR/usr/local/bin/thirtyos-install"
+        chmod +x "$MOUNT_DIR/usr/local/bin/thirtyos-install"
+        log "thirtyos-install tersalin dari lokal"
+    else
+        warn "thirtyos-install tidak ditemukan, skip."
+    fi
 fi
 
 # ── Chroot & Modifikasi ────────────────────────────────────

@@ -441,9 +441,9 @@ cmd_update() {
     fi
 
     info "Update thirtyos-install..."
-    # Cek update dari GitHub (opsional, uncomment kalau ada repo)
-    # curl -fsSL https://raw.githubusercontent.com/ahdikhfDev/thirtyos/main/thirtyos-install \
-    #     -o /usr/local/bin/thirtyos-install && chmod +x /usr/local/bin/thirtyos-install
+    curl -fsSL https://raw.githubusercontent.com/ahdikhfDev/ThirtyOS-tools/main/thirtyos-install \
+        -o /usr/local/bin/thirtyos-install && chmod +x /usr/local/bin/thirtyos-install
+    log "thirtyos-install terupdate"
 
     log "Update selesai!"
 }
