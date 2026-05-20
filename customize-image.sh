@@ -149,7 +149,7 @@ cat > /etc/default/zramswap << 'ZRAM'
 ALGO=lz4
 PERCENT=50
 ZRAM
-systemctl enable zramswap 2>/dev/null || true
+# enable via thirtyos-install optimize di first-boot
 
 echo "--- Konfigurasi tmpfs /tmp ---"
 if ! grep -q "tmpfs /tmp" /etc/fstab; then

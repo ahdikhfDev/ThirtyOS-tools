@@ -730,7 +730,24 @@ cmd_optimize() {
     do_optimize_all() {
         echo ""
 
-        info "1/7 — Matikan journal persistent (log di RAM)..."
+        info "1/8 — Fix & aktifkan ZRAM swap..."
+        if ! lsmod | grep -q zram; then
+            modprobe zram 2>/dev/null || true
+        fi
+        if ! command -v zramswap &>/dev/null; then
+            apt-get install -y zram-tools 2>/dev/null || true
+        fi
+        if [[ -f /etc/default/zramswap ]]; then
+            systemctl enable --now zramswap 2>/dev/null || true
+        fi
+        sleep 1
+        if zramctl 2>/dev/null | grep -q zram; then
+            log "ZRAM: $(zramctl 2>/dev/null | grep -v NAME | awk '{print $3, "/", $2}')"
+        else
+            warn "ZRAM gagal, cek: dmesg | grep zram"
+        fi
+
+        info "2/8 — Matikan journal persistent (log di RAM)..."
         journalctl --vacuum-size=10M 2>/dev/null || true
         cat > /etc/systemd/journald.conf << 'JOURNAL'
 [Journal]
@@ -741,12 +758,12 @@ JOURNAL
         systemctl restart systemd-journald 2>/dev/null || true
         log "Journal pindah ke RAM (50MB max)"
 
-        info "2/7 — Turunin swappiness..."
+        info "3/8 — Turunin swappiness..."
         echo "vm.swappiness=10" > /etc/sysctl.d/90-swappiness.conf
         sysctl -w vm.swappiness=10 2>/dev/null || true
         log "Swappiness: 10"
 
-        info "3/7 — IO Scheduler buat SSD..."
+        info "4/8 — IO Scheduler buat SSD..."
         for disk in /sys/block/sd* /sys/block/nvme*; do
             [[ -f "$disk/queue/scheduler" ]] && \
                 echo "none" > "$disk/queue/scheduler" 2>/dev/null || true
@@ -757,7 +774,7 @@ ACTION=="add|change", KERNEL=="nvme*", ATTR{queue/scheduler}="none"
 UDEV
         log "IO Scheduler: none (NVMe) / none (SSD)"
 
-        info "4/7 — CPU governor: schedutil..."
+        info "5/8 — CPU governor: schedutil..."
         for cpu in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do
             echo "schedutil" > "$cpu" 2>/dev/null || true
         done
@@ -766,7 +783,7 @@ ACTION=="add", SUBSYSTEM=="cpu", RUN+="/bin/sh -c 'echo schedutil > /sys/devices
 CPUFREQ
         log "CPU Governor: schedutil"
 
-        info "5/7 — Disable NetworkManager (kalo pake static IP)..."
+        info "6/8 — Disable NetworkManager (kalo pake static IP)..."
         if systemctl is-active NetworkManager &>/dev/null; then
             warn "NetworkManager aktif. Matikan? (y/N):"
             read -r NM_DISABLE
@@ -775,17 +792,16 @@ CPUFREQ
                 log "NetworkManager dimatikan"
             fi
         else
-            log "NetworkManager sudah nonaktif"
-        fi
+        log "NetworkManager sudah nonaktif"
 
-        info "6/7 — Bersihin cache & package ga kepake..."
+        info "7/8 — Bersihin cache & package ga kepake..."
         apt-get clean 2>/dev/null || true
         apt-get autoremove --purge -y 2>/dev/null || true
         rm -rf /var/lib/apt/lists/* 2>/dev/null || true
         rm -rf /tmp/* 2>/dev/null || true
         log "Cache & orphans dibersihkan"
 
-        info "7/7 — Disable service ga penting..."
+        info "8/8 — Disable service ga penting..."
         for svc in cups-browsed cups bluetooth avahi-daemon ModemManager \
                    apt-daily apt-daily-upgrade whoopsie pppd-dns \
                    speech-dispatcher; do
