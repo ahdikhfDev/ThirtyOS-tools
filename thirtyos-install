@@ -4,7 +4,7 @@
 #  Usage: thirtyos-install [command]
 # ============================================================
 
-VERSION="1.2.0"
+VERSION="1.2.1"
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
 CYAN='\033[0;36m'; BOLD='\033[1m'; NC='\033[0m'
 
@@ -1212,30 +1212,12 @@ cmd_ai_status() {
     echo ""
 }
 
-# ── AI subcommand: web (ttyd + OpenCode) ──
+# ── AI subcommand: web (OpenCode Web UI) ──
 cmd_ai_web() {
     check_root "ai"
     show_banner
-    echo -e "${BOLD}=== OpenCode via Web Browser (ttyd) ===${NC}"
+    echo -e "${BOLD}=== OpenCode Web Interface ===${NC}"
     echo ""
-
-    if ! command -v ttyd &>/dev/null; then
-        info "Menginstall ttyd..."
-        apt-get install -y ttyd 2>/dev/null || {
-            ARCH=$(uname -m)
-            case "$ARCH" in
-                aarch64) BIN="ttyd.aarch64" ;;
-                armv7l)  BIN="ttyd.armhf" ;;
-                x86_64)  BIN="ttyd.x86_64" ;;
-                *) err "Arsitektur tidak didukung: $ARCH"; return 1 ;;
-            esac
-            wget -q "https://github.com/tsl0922/ttyd/releases/latest/download/${BIN}" -O /usr/local/bin/ttyd
-            chmod +x /usr/local/bin/ttyd
-        }
-        log "ttyd terinstall"
-    else
-        log "ttyd sudah ada: $(ttyd --version)"
-    fi
 
     if ! command -v opencode &>/dev/null; then
         warn "OpenCode belum terinstall. Install dulu: thirtyos-install ai setup"
@@ -1248,49 +1230,56 @@ cmd_ai_web() {
         fi
     fi
 
-    # Buat systemd service ttyd untuk OpenCode
-    TTYD_PORT="${TTYD_PORT:-7681}"
-    TTYD_USER="${SUDO_USER:-${USER}}"
+    # Pastikan opencode config valid
+    OC_USER="${SUDO_USER:-${USER}}"
+    OC_HOME=$(eval echo ~$OC_USER)
+    rm -f "$OC_HOME/.config/opencode/config.json" 2>/dev/null || true
 
-    cat > /etc/systemd/system/ttyd-opencode.service << 'TTYDSVC'
+    # Port & password
+    OC_PORT="${OC_PORT:-4096}"
+    OC_PASS="${OC_PASS:-thirtyos}"
+
+    # Buat systemd service untuk opencode serve
+    cat > /etc/systemd/system/opencode-web.service << OCSVC
 [Unit]
-Description=ttyd - OpenCode Web Terminal
+Description=OpenCode Web Interface
 After=network.target
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/ttyd -p 7681 -W -t disableResizeOverlay=true -t fontSize=14 opencode
-Restart=always
+ExecStart=/usr/local/bin/opencode serve --port ${OC_PORT} --hostname 0.0.0.0 --print-logs
+Restart=on-failure
 RestartSec=5
-User=root
-Environment=TERM=xterm-256color
+User=${OC_USER}
+Environment=OPENCODE_SERVER_PASSWORD=${OC_PASS}
+Environment=TMPDIR=/var/tmp
+Environment=HOME=${OC_HOME}
+StandardOutput=journal
+StandardError=journal
 
 [Install]
 WantedBy=multi-user.target
-TTYDSVC
-
-    # Matikan ttyd bawaan apt kalo ada (biar gak tabrakan)
-    systemctl disable --now ttyd 2>/dev/null || true
+OCSVC
 
     systemctl daemon-reload
-    systemctl enable --now ttyd-opencode
+    systemctl enable --now opencode-web
 
-    # Cek port
-    sleep 2
-    if ss -tlnp | grep -q ":${TTYD_PORT} "; then
-        log "ttyd berjalan di port ${TTYD_PORT}"
+    # Cek service
+    sleep 5
+    if curl -sI http://localhost:${OC_PORT} 2>/dev/null | grep -q "401\|200"; then
+        log "OpenCode Web berjalan di port ${OC_PORT}"
     else
-        warn "ttyd mungkin belum siap, cek: systemctl status ttyd-opencode"
+        warn "OpenCode Web mungkin belum siap, cek: systemctl status opencode-web"
     fi
 
     LOCAL_IP=$(hostname -I | awk '{print $1}')
     echo ""
     log "${BOLD}OpenCode siap diakses via browser!${NC}"
-    echo -e "  Local  : ${CYAN}http://${LOCAL_IP}:${TTYD_PORT}${NC}"
-    echo -e "  Tunnel : ${CYAN}thirtyos-install ai tunnel${NC}"
+    echo -e "  Local   : ${CYAN}http://${LOCAL_IP}:${OC_PORT}${NC}"
+    echo -e "  Username: ${GREEN}opencode${NC}"
+    echo -e "  Password: ${GREEN}${OC_PASS}${NC}"
     echo ""
-    echo -e "  ${YELLOW}Note:${NC} Terminal ini langsung menjalankan OpenCode CLI."
-    echo -e "  Ketik perintah OpenCode seperti biasa di browser."
+    echo -e "  ${YELLOW}Tunnel:${NC} thirtyos-install ai tunnel (port 4096)"
     echo ""
 }
 
@@ -1315,6 +1304,10 @@ cmd_ai_update() {
     systemctl restart 9router 2>/dev/null || true
     log "9Router native modules siap"
 
+    info "Restart OpenCode Web..."
+    systemctl restart opencode-web 2>/dev/null || true
+    log "OpenCode Web di-restart"
+
     log "${BOLD}AI services update selesai!${NC}"
 }
 
@@ -1336,7 +1329,7 @@ cmd_ai_tunnel() {
     echo -e "  Buat tunnel untuk akses AI services dari luar."
     echo -e "  Port yang di-expose via subdomain:"
     echo -e "    ${GREEN}20128${NC} — 9Router Dashboard + API (ai.domain.com)"
-    echo -e "    ${GREEN}7681${NC}  — OpenCode Web Terminal (opencode.domain.com)"
+    echo -e "    ${GREEN}4096${NC}  — OpenCode Web UI (opencode.domain.com)"
     echo ""
     ask "Domain utama (contoh: ai.namadomain.com):"
     read -r AI_DOMAIN
@@ -1361,7 +1354,7 @@ ingress:
   - hostname: ${AI_DOMAIN}
     service: http://localhost:20128
   - hostname: ${OC_DOMAIN}
-    service: http://localhost:7681
+    service: http://localhost:4096
   - service: http_status:404
 CFG
 
@@ -1389,7 +1382,7 @@ SVC
 
     log "AI Tunnel aktif!"
     info "9Router  : https://${AI_DOMAIN}"
-    info "OpenCode : https://${OC_DOMAIN}"
+    info "OpenCode : https://${OC_DOMAIN} (user: opencode / pass: thirtyos)"
 }
 
 # ── Main ───────────────────────────────────────────────────
