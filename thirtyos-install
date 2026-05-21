@@ -259,7 +259,8 @@ cmd_botwa() {
     LOCAL_IP=$(hostname -I | awk '{print $1}')
     echo ""
     info "Web Dashboard: ${CYAN}http://${LOCAL_IP}:6789${NC}"
-    echo "  Manage skills, whitelist, API keys, settings"
+    echo "  Login password default: ${YELLOW}12345678${NC}"
+    echo "  Manage skills, whitelist, API keys, settings, ganti password"
     echo ""
     info "Commands:"
     echo "  pm2 logs bot-wa         → lihat log + QR code"
