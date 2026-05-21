@@ -176,35 +176,62 @@ fi
 
 echo "--- Custom MOTD ---"
 rm -f /etc/update-motd.d/*
-cat > /etc/update-motd.d/00-thirtyos << 'MOTD'
+cat > /etc/update-motd.d/00-thirtyos << 'MOTDEOF'
 #!/bin/bash
-CYAN='\033[0;36m'
-YELLOW='\033[1;33m'
-GREEN='\033[0;32m'
-NC='\033[0m'
 
-echo -e "${CYAN}"
-cat << 'ASCII'
-   __  __    _      __           ____  _____
-  / /_/ /_  (_)____/ /_ __  __  / __ \/ ___/
- / __/ __ \/ / ___/ __// / / / / / / /\__ \ 
-/ /_/ / / / / /  / /_ / /_/ / / /_/ /___/ / 
-\__/_/ /_/_/_/   \__/ \__, /  \____//____/  
-                     /____/                 
-ASCII
-echo -e "${NC}"
-echo -e "${YELLOW}  ThirtyOS v1.0 — Custom Armbian for HG680P${NC}"
-echo -e "${GREEN}  by Thirty | github.com/ahdikhfDev${NC}"
+c_art='\033[38;5;51m'
+c_sep='\033[1;30m'
+c_lbl='\033[38;5;39m'
+c_val='\033[0m'
+c_warn='\033[38;5;214m'
+c_rst='\033[0m'
+
+os_val=$(grep -m1 'PRETTY_NAME' /etc/os-release | cut -d= -f2 | tr -d '"')
+[ -z "$os_val" ] && os_val="Armbian 26.2.1 noble"
+host_val=$(hostname)
+ip_val=$(hostname -I | awk '{print $1}')
+up_val=$(uptime -p | sed 's/up //')
+ram_val=$(free -m | awk '/Mem/{printf "%dMB / %dMB", $3, $2}')
+disk_val=$(df -h / | awk 'NR==2 {printf "%s / %s (%s)", $3, $2, $5}')
+cpu_val="4xCortex-A53"
+
 echo ""
-echo -e "  Hostname : $(hostname)"
-echo -e "  IP       : $(hostname -I | awk '{print $1}')"
-echo -e "  Uptime   : $(uptime -p)"
-echo -e "  RAM      : $(free -m | awk '/Mem/{printf "%dMB / %dMB", $3, $2}')"
+printf "${c_art}%-48s${c_sep}│  ${c_lbl}%-5s: ${c_val}%s\n" '   __  __    _      __           ____  _____ ' 'OS' "$os_val"
+printf "${c_art}%-48s${c_sep}│  ${c_lbl}%-5s: ${c_val}%s\n" '  / /_/ /_  (_)____/ /_ __  __  / __ \/ ___/ ' 'Host' "${host_val} (${ip_val})"
+printf "${c_art}%-48s${c_sep}│  ${c_lbl}%-5s: ${c_val}%s\n" ' / __/ __ \/ / ___/ __// / / / / / / /\__ \  ' 'Up' "$up_val"
+printf "${c_art}%-48s${c_sep}│  ${c_lbl}%-5s: ${c_val}%s\n" '/ /_/ / / / / /  / /_ / /_/ / / /_/ /___/ /  ' 'RAM' "$ram_val"
+printf "${c_art}%-48s${c_sep}│  ${c_lbl}%-5s: ${c_val}%s\n" '\__/_/ /_/_/_/   \__/ \__, /  \____//____/   ' 'Disk' "$disk_val"
+printf "${c_art}%-48s${c_sep}│  ${c_lbl}%-5s: ${c_val}%s\n" '                     /____/                  ' 'CPU' "$cpu_val"
 echo ""
-echo -e "  Jalankan ${YELLOW}thirtyos-install${NC} untuk setup layanan."
+echo -e "  ${c_warn}Jalankan 'thirtyos-install' untuk setup layanan.${c_rst}"
 echo ""
-MOTD
+MOTDEOF
 chmod +x /etc/update-motd.d/00-thirtyos
+
+echo "--- Regenerasi MOTD untuk saat ini ---"
+bash /etc/update-motd.d/00-thirtyos | tee /etc/motd > /dev/null
+
+echo "--- Systemd service regenerate MOTD tiap boot ---"
+cat > /etc/systemd/system/thirtyos-motd.service << 'SVC'
+[Unit]
+Description=Regenerate ThirtyOS MOTD at boot
+After=network.target
+
+[Service]
+Type=oneshot
+ExecStart=/bin/bash -c '/etc/update-motd.d/00-thirtyos | tee /etc/motd > /dev/null'
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
+SVC
+systemctl enable thirtyos-motd.service 2>/dev/null || true
+
+# Disable PAM motd (biar gak dobel tampil)
+if grep -q "^session    optional     pam_motd.so" /etc/pam.d/sshd; then
+    sed -i 's/^session    optional     pam_motd.so/#session    optional     pam_motd.so/' /etc/pam.d/sshd
+    echo "PAM motd dinonaktifkan"
+fi
 
 # Aktifkan PrintMotd di SSH
 if grep -q "^PrintMotd no" /etc/ssh/sshd_config; then
