@@ -1022,16 +1022,16 @@ cmd_ai_setup() {
 
     # ── Install OpenCode ──
     info "Install OpenCode..."
-    if command -v opencode &>/dev/null; then
+    if opencode --version &>/dev/null; then
         warn "OpenCode sudah terinstall: $(opencode --version 2>/dev/null || echo 'latest')"
         ask "Update OpenCode? (Y/n):"
         read -r UPDATE_OC
         if [[ ! "$UPDATE_OC" =~ ^[Nn]$ ]]; then
-            curl -fsSL https://opencode.ai/install | bash 2>/dev/null || true
+            TMPDIR=/var/tmp npm install -g opencode-ai 2>&1 || true
             log "OpenCode diupdate"
         fi
     else
-        curl -fsSL https://opencode.ai/install | bash 2>/dev/null || err "Gagal install OpenCode"
+        TMPDIR=/var/tmp npm install -g opencode-ai 2>&1 || err "Gagal install OpenCode"
         log "OpenCode terinstall"
     fi
 
@@ -1063,6 +1063,8 @@ CFG
     log "9Router dikonfigurasi dengan free providers"
 
     # ── Buat systemd service untuk 9Router ──
+    # Pre-build native modules biar gak compile tiap start
+    TMPDIR=/var/tmp npm install -g better-sqlite3 2>&1 || true
     cat > /etc/systemd/system/9router.service << 'SVC9R'
 [Unit]
 Description=9Router AI Gateway
@@ -1071,10 +1073,12 @@ After=network.target
 [Service]
 Type=simple
 ExecStart=/usr/bin/9router
-Restart=always
-RestartSec=5
+Restart=on-failure
+RestartSec=10
 User=root
 Environment=NODE_ENV=production
+Environment=TMPDIR=/var/tmp
+TimeoutStartSec=300
 
 [Install]
 WantedBy=multi-user.target
@@ -1184,12 +1188,16 @@ cmd_ai_update() {
 
     info "Update 9Router..."
     npm update -g 9router 2>/dev/null || true
-    systemctl restart 9router 2>/dev/null || true
     log "9Router diupdate"
 
     info "Update OpenCode..."
-    curl -fsSL https://opencode.ai/install | bash 2>/dev/null || true
+    TMPDIR=/var/tmp npm update -g opencode-ai 2>&1 || TMPDIR=/var/tmp npm install -g opencode-ai 2>&1 || true
     log "OpenCode diupdate"
+
+    info "Pre-build native modules 9Router..."
+    TMPDIR=/var/tmp npm install -g better-sqlite3 2>&1 || true
+    systemctl restart 9router 2>/dev/null || true
+    log "9Router native modules siap"
 
     log "${BOLD}AI services update selesai!${NC}"
 }

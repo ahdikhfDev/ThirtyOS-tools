@@ -146,7 +146,7 @@ export LANG=C.UTF-8
 
 echo "--- Konfigurasi tmpfs /tmp ---"
 if ! grep -q "tmpfs /tmp" /etc/fstab; then
-    echo "tmpfs /tmp tmpfs defaults,noatime,nosuid,nodev,size=64M 0 0" >> /etc/fstab
+    echo "tmpfs /tmp tmpfs defaults,noatime,nosuid,nodev,size=256M 0 0" >> /etc/fstab
 fi
 
 echo "--- Disable service yang tidak diperlukan ---"
