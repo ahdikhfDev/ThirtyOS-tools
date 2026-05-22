@@ -1223,7 +1223,7 @@ OCCFG
 }
 
 cmd_ai_status() {
-    check_root "ai"
+    echo ""
     echo ""
     echo -e "${CYAN}── 9Router ────────────────────────────${NC}"
     if command -v 9router &>/dev/null; then
@@ -1282,7 +1282,13 @@ cmd_ai_web() {
     OC_CONFIG_DIR="$OC_HOME/.config/opencode"
     OC_CONFIG="$OC_CONFIG_DIR/config.json"
     if [[ -f "$OC_CONFIG" ]]; then
-        if command -v jq &>/dev/null && ! jq empty "$OC_CONFIG" 2>/dev/null; then
+        local valid=true
+        if command -v jq &>/dev/null; then
+            jq empty "$OC_CONFIG" 2>/dev/null || valid=false
+        elif command -v python3 &>/dev/null; then
+            python3 -c "import json,sys; json.load(open('$OC_CONFIG'))" 2>/dev/null || valid=false
+        fi
+        if [[ "$valid" == false ]]; then
             warn "config.json corrupt — rebuild default"
             echo '{"model": "opencode-free"}' > "$OC_CONFIG"
         fi
@@ -1298,7 +1304,7 @@ cmd_ai_web() {
         OC_PASS=$(cat "$OC_PASS_FILE")
     fi
     OC_PASS="${OC_PASS:-$(openssl rand -hex 8)}"
-    echo "$OC_PASS" > "$OC_PASS_FILE"
+    echo "OPENCODE_SERVER_PASSWORD=${OC_PASS}" > "$OC_PASS_FILE"
     chmod 600 "$OC_PASS_FILE"
 
     # Buat systemd service untuk opencode serve
@@ -1313,7 +1319,7 @@ ExecStart=/usr/local/bin/opencode serve --port ${OC_PORT} --hostname 0.0.0.0 --p
 Restart=on-failure
 RestartSec=5
 User=${OC_USER}
-Environment=OPENCODE_SERVER_PASSWORD=${OC_PASS}
+EnvironmentFile=${OC_PASS_FILE}
 Environment=TMPDIR=/var/tmp
 Environment=HOME=${OC_HOME}
 StandardOutput=journal
