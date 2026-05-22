@@ -4,7 +4,7 @@
 #  Usage: thirtyos-install [command]
 # ============================================================
 
-VERSION="1.2.3"
+VERSION="1.2.4"
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
 CYAN='\033[0;36m'; BOLD='\033[1m'; NC='\033[0m'
 
@@ -625,6 +625,11 @@ cmd_status() {
         echo -e "  Build     : $THIRTYOS_BUILD_DATE"
         echo ""
     fi
+
+    # AI Services
+    echo -e "${CYAN}── AI Services ──────────────────────────${NC}"
+    cmd_ai_status 2>/dev/null || echo "  AI stack belum diinstall"
+    echo ""
 }
 
 # ── Command: uninstall ─────────────────────────────────────
@@ -740,12 +745,18 @@ cmd_prepare() {
         log "ZRAM swap sudah aktif"
     fi
 
-    info "Clone bot-wa..."
-    if [[ ! -d /opt/bot-wa ]]; then
-        git clone --depth=1 https://github.com/ahdikhfDev/bot-wa /opt/bot-wa 2>/dev/null || true
-    fi
-    if [[ -d /opt/bot-wa ]]; then
-        cd /opt/bot-wa && npm install --omit=dev 2>/dev/null || true
+    ask "Clone & setup bot-wa (WhatsApp AI bot)? (Y/n):"
+    read -r DO_BOTWA
+    if [[ ! "$DO_BOTWA" =~ ^[Nn]$ ]]; then
+        info "Clone bot-wa..."
+        if [[ ! -d /opt/bot-wa ]]; then
+            git clone --depth=1 https://github.com/ahdikhfDev/bot-wa /opt/bot-wa 2>/dev/null || true
+        fi
+        if [[ -d /opt/bot-wa ]]; then
+            cd /opt/bot-wa && npm install --omit=dev 2>/dev/null || true
+        fi
+    else
+        log "Skip bot-wa install"
     fi
 
     # Setup log rotation
@@ -1265,14 +1276,30 @@ cmd_ai_web() {
         fi
     fi
 
-    # Pastikan opencode config valid
+    # Pastikan opencode config valid (jangan hapus, cek dulu)
     OC_USER="${SUDO_USER:-${USER}}"
     OC_HOME=$(eval echo ~$OC_USER)
-    rm -f "$OC_HOME/.config/opencode/config.json" 2>/dev/null || true
+    OC_CONFIG_DIR="$OC_HOME/.config/opencode"
+    OC_CONFIG="$OC_CONFIG_DIR/config.json"
+    if [[ -f "$OC_CONFIG" ]]; then
+        if command -v jq &>/dev/null && ! jq empty "$OC_CONFIG" 2>/dev/null; then
+            warn "config.json corrupt — rebuild default"
+            echo '{"model": "opencode-free"}' > "$OC_CONFIG"
+        fi
+    else
+        mkdir -p "$OC_CONFIG_DIR"
+        echo '{"model": "opencode-free"}' > "$OC_CONFIG"
+    fi
 
     # Port & password
     OC_PORT="${OC_PORT:-4096}"
-    OC_PASS="${OC_PASS:-thirtyos}"
+    OC_PASS_FILE="/etc/opencode-web.pass"
+    if [[ -z "${OC_PASS}" && -f "$OC_PASS_FILE" ]]; then
+        OC_PASS=$(cat "$OC_PASS_FILE")
+    fi
+    OC_PASS="${OC_PASS:-$(openssl rand -hex 8)}"
+    echo "$OC_PASS" > "$OC_PASS_FILE"
+    chmod 600 "$OC_PASS_FILE"
 
     # Buat systemd service untuk opencode serve
     cat > /etc/systemd/system/opencode-web.service << OCSVC

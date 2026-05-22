@@ -37,7 +37,7 @@ INPUT_IMAGE="$1"
 [[ ! -f "$INPUT_IMAGE" ]] && err "File tidak ditemukan: $INPUT_IMAGE"
 
 # ── Config ─────────────────────────────────────────────────
-VERSION="1.0.0"
+VERSION="1.2.4"
 OUTPUT_IMAGE="ThirtyOS_v${VERSION}_HG680P.img"
 WORK_DIR="$(dirname "$(realpath "$0")")/thirtyos-build"
 MOUNT_DIR="${WORK_DIR}/mount"
@@ -250,7 +250,7 @@ systemctl enable zram-swap.service 2>/dev/null || true
 
 echo "--- Buat file versi ThirtyOS ---"
 cat > /etc/thirtyos-release << RELEASE
-THIRTYOS_VERSION="1.0.0"
+THIRTYOS_VERSION="1.2.4"
 THIRTYOS_CODENAME="Satu"
 THIRTYOS_BUILD_DATE="$(date +%Y-%m-%d)"
 THIRTYOS_ARCH="arm64"
